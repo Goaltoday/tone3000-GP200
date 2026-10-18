@@ -24,6 +24,7 @@ PluginRoot::PluginRoot(Services& services)
   setOpaque(true);
   setFocusContainerType(FocusContainerType::keyboardFocusContainer);
 
+  header_.onGp200 = [this] { setGp200Shown(!gp200Shown_); };
   header_.onToggleTuner = [this](bool show) { setTunerShown(show); };
   header_.onStereoToggle = [this](bool stereo) {
     closeTunerThen([&] { services_.chain.setStereoMode(stereo); });
@@ -348,8 +349,17 @@ void PluginRoot::handleBannerAction(BannerAction action) {
   }
 }
 
+// The transfer panel stays alive while hidden: changing tabs never abandons a write.
+void PluginRoot::setGp200Shown(bool shown) {
+  if (!gp200_) { gp200_ = std::make_unique<GP200Panel>(services_); addChildComponent(*gp200_); }
+  gp200Shown_ = shown;
+  if (shown) { gp200_->refreshLoaded(); setTunerShown(false); overlay_.toFront(false); }
+  syncTakeovers(); resized();
+}
+
 // Takeovers
 void PluginRoot::setTunerShown(bool shown) {
+  if (shown) gp200Shown_ = false;
   if (shown == tunerShown()) return;
   if (shown) {
     tuner_ = std::make_unique<TunerView>(services_);
@@ -365,7 +375,8 @@ void PluginRoot::setTunerShown(bool shown) {
 }
 
 void PluginRoot::setBrowserShown(bool shown) {
-  if (shown == browserShown()) return;
+  if (shown) gp200Shown_ = false;
+  if (shown == browserShown()) { syncTakeovers(); return; }
   if (shown) {
     browser_ = std::make_unique<ToneBrowser>(services_);
     // Closing without picking abandons any pending swap / insert target.
@@ -392,11 +403,12 @@ void PluginRoot::setBrowserShown(bool shown) {
 // tick at 30 Hz and would otherwise repaint for nothing.
 void PluginRoot::syncTakeovers() {
   const bool tuner = tunerShown(), browser = browserShown(), signIn = signInShown();
-  const bool column = browser || signIn;  // something covers the whole column
+  const bool column = browser || signIn || gp200Shown_;  // something covers the whole column
   main_.setVisible(!tuner && !column);
   faceplate_.setVisible(tuner || !column);
-  if (browser_) browser_->setVisible(!tuner && !signIn);
+  if (browser_) browser_->setVisible(!tuner && !signIn && !gp200Shown_);
   if (signIn_) signIn_->setVisible(!tuner);
+  if (gp200_) gp200_->setVisible(gp200Shown_ && !signIn);
 }
 
 void PluginRoot::closeTunerThen(const std::function<void()>& fn) {
@@ -405,6 +417,8 @@ void PluginRoot::closeTunerThen(const std::function<void()>& fn) {
 }
 
 void PluginRoot::showChainThen(const std::function<void()>& fn) {
+  gp200Shown_ = false;
+  syncTakeovers();
   setTunerShown(false);
   if (browserShown()) {
     services_.loadFlow.clearPendingTargets();
@@ -461,6 +475,7 @@ void PluginRoot::resized() {
   auto column = juce::Rectangle<int>(0, slotH, design::kWidth, design::kHeight + hintH);
   if (hintsVisible_) hintBar_.setBounds(column.removeFromBottom(hintH));
   header_.setBounds(column.removeFromTop(PluginHeader::kHeight));
+  if (gp200_) gp200_->setBounds(column);
   if (browser_) browser_->setBounds(column);  // the rest, faceplate included
   if (signIn_) signIn_->setBounds(column);
   faceplate_.setBounds(column.removeFromBottom(Faceplate::kHeight));

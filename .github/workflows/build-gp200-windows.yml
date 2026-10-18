@@ -1,0 +1,144 @@
+name: Build Tone3000 GP200 - Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_vst3:
+        description: Also build VST3
+        type: boolean
+        default: true
+      run_ui_tests:
+        description: Build and run Tone3000 UI self-tests
+        type: boolean
+        default: true
+  push:
+    branches: [main, master, gp200]
+    paths:
+      - '.github/workflows/build-gp200-windows.yml'
+      - 'plugin/**'
+      - 'test/gp200/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'VERSION'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gp200-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x64 Release
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      T3K_PUBLISHABLE_KEY: ${{ secrets.T3K_PUBLISHABLE_KEY || vars.T3K_PUBLISHABLE_KEY }}
+      T3K_UPDATE_NOTICE: 'false'
+    steps:
+      - name: Checkout fork and pinned submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Initialize NAM Core submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
+          $namCore = 'plugin/NeuralAmpModelerCore/CMakeLists.txt'
+          if (-not (Test-Path $namCore)) {
+            Write-Warning 'NAM Core was not materialized from the fork gitlink. Fetching the upstream revision pinned by the Tone3000 base.'
+            if (Test-Path 'plugin/NeuralAmpModelerCore') { Remove-Item 'plugin/NeuralAmpModelerCore' -Recurse -Force }
+            git clone --no-checkout https://github.com/sdatkinson/NeuralAmpModelerCore.git plugin/NeuralAmpModelerCore
+            if ($LASTEXITCODE -ne 0) { throw 'Could not clone NeuralAmpModelerCore.' }
+            git -C plugin/NeuralAmpModelerCore checkout 1f42f88535884450104b8711d7595019afa0495b
+            if ($LASTEXITCODE -ne 0) { throw 'Could not check out the NAM Core revision pinned by the Tone3000 base.' }
+            git -C plugin/NeuralAmpModelerCore submodule update --init --recursive --force
+            if ($LASTEXITCODE -ne 0) { throw 'Could not initialize NAM Core nested dependencies.' }
+          }
+          if (-not (Test-Path 'plugin/NeuralAmpModelerCore/NAM/dsp.h')) { throw 'NAM Core source files are missing after submodule initialization.' }
+          git submodule status --recursive
+
+      - name: Check catalog configuration
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:T3K_PUBLISHABLE_KEY)) {
+            Write-Warning 'T3K_PUBLISHABLE_KEY is not configured. The build will work; catalog sign-in needs your own publishable key. Local NAM loading remains available.'
+          }
+
+      - name: Configure GP200 protocol tests
+        run: cmake -S test/gp200 -B build-frames -G 'Visual Studio 17 2022' -A x64
+      - name: Build GP200 protocol tests
+        run: cmake --build build-frames --config Release --parallel 2
+      - name: Run GP200 protocol tests
+        run: ctest --test-dir build-frames -C Release --output-on-failure --output-junit gp200-tests.xml
+
+      - name: Configure Tone3000
+        run: |
+          $uiTests = if ('${{ github.event_name }}' -eq 'push' -or '${{ inputs.run_ui_tests }}' -eq 'true') { 'ON' } else { 'OFF' }
+          cmake -S . -B build-gp200 -G 'Visual Studio 17 2022' -A x64 -DBUILD_AAX=OFF -DBUILD_LV2=OFF -DBUILD_CLAP=OFF "-DT3K_BUILD_UI_TESTBED=$uiTests" 2>&1 | Tee-Object configure-gp200.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Standalone
+        run: |
+          cmake --build build-gp200 --config Release --target TONE3000_Standalone --parallel 2 2>&1 | Tee-Object build-gp200.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build VST3
+        if: github.event_name == 'push' || inputs.build_vst3
+        run: |
+          cmake --build build-gp200 --config Release --target TONE3000_VST3 --parallel 2 2>&1 | Tee-Object build-vst3.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build UI testbed
+        if: github.event_name == 'push' || inputs.run_ui_tests
+        run: cmake --build build-gp200 --config Release --target UiTestbed --parallel 2
+      - name: Run UI self-tests
+        if: github.event_name == 'push' || inputs.run_ui_tests
+        run: ctest --test-dir build-gp200/plugin/ui/testbed -C Release --output-on-failure --output-junit ui-tests.xml
+
+      - name: Package EXE, VST3, notices and hashes
+        run: |
+          $standalone = 'build-gp200/plugin/TONE3000_artefacts/Release/Standalone/TONE3000.exe'
+          if (-not (Test-Path $standalone)) { throw "Standalone executable missing: $standalone" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $standalone dist/TONE3000-GP200.exe
+          $vst = 'build-gp200/plugin/TONE3000_artefacts/Release/VST3/TONE3000.vst3'
+          if (Test-Path $vst) { Copy-Item $vst dist/ -Recurse }
+          Copy-Item docs/GP200_INTEGRATION.md dist/README.md
+          Copy-Item docs/GP200_GITHUB_ACTIONS_ES.md dist/
+          Copy-Item LICENSE dist/LICENSE-TONE3000-MIT.txt
+          Copy-Item plugin/ui/views/gp200/COPYING.GPL-3.0 dist/
+          Copy-Item plugin/ui/views/gp200/NOTICE.md dist/GP200-NOTICE.md
+          "Commit: $env:GITHUB_SHA`nRunner: $env:RUNNER_OS`nConfiguration: Release x64`nFirmware: not included" | Set-Content dist/BUILD.txt
+          $files = Get-ChildItem dist -Recurse -File | Sort-Object FullName
+          $lines = foreach ($file in $files) {
+            $relative = [IO.Path]::GetRelativePath((Resolve-Path dist).Path, $file.FullName)
+            "$((Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower())  $relative"
+          }
+          $lines | Set-Content -Encoding ascii dist/SHA256.txt
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: TONE3000-GP200-Windows-x64-EXPERIMENTAL
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload logs and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TONE3000-GP200-build-logs
+          path: |
+            *-gp200.log
+            build-vst3.log
+            build-frames/gp200-tests.xml
+            build-frames/Testing/Temporary/LastTest.log
+            build-gp200/plugin/ui/testbed/ui-tests.xml
+            build-gp200/plugin/ui/testbed/Testing/Temporary/LastTest.log
+            build-gp200/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+          retention-days: 14

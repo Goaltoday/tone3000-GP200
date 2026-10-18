@@ -36,6 +36,10 @@ juce::RangedAudioParameter* ProcessorBackend::parameter(const juce::String& id) 
 }
 
 // Chain state / history
+std::vector<uint8_t> ProcessorBackend::getGp200NamBytes(const std::string& blockId, int modelId) {
+  return processor_.getGp200NamBytes(blockId, modelId);
+}
+
 juce::var ProcessorBackend::getChainState(int knownRevision) {
   return processor_.getChainState(knownRevision);
 }

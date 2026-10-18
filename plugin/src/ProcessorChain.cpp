@@ -1693,3 +1693,16 @@ juce::String TONE3000Processor::getAccessToken() const {
   juce::ScopedLock lock(accessTokenMutex);
   return accessToken;
 }
+
+// Called only on explicit UI selection; no parsing, network or MIDI in audio.
+std::vector<uint8_t> TONE3000Processor::getGp200NamBytes(const std::string& blockId, int modelId) const {
+  const juce::ScopedTryLock lock(chainMutex);
+  if (!lock.isLocked()) return {};
+  for (const auto& blocks : lanes) for (const auto& block : blocks) {
+    if (block->id != blockId || block->type != ChainBlockType::NAM || !block->loaded ||
+        block->modelLoading || block->activeModelId != modelId) continue;
+    const auto it = block->modelCache.find(modelId);
+    if (it != block->modelCache.end() && it->second.size() <= 8*1024*1024) return it->second;
+  }
+  return {};
+}

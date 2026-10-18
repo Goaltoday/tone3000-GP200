@@ -34,6 +34,7 @@ public:
   virtual juce::RangedAudioParameter* parameter(const juce::String& id) = 0;
 
   // Chain state / history
+  virtual std::vector<uint8_t> getGp200NamBytes(const std::string&, int) { return {}; }
   virtual juce::var getChainState(int knownRevision) = 0;
   virtual juce::uint32 chainRevision() = 0;
   virtual bool undoChain() = 0;

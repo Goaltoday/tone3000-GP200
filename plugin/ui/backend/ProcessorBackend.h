@@ -21,6 +21,7 @@ public:
 
   juce::RangedAudioParameter* parameter(const juce::String& id) override;
 
+  std::vector<uint8_t> getGp200NamBytes(const std::string&, int) override;
   juce::var getChainState(int knownRevision) override;
   juce::uint32 chainRevision() override;
   bool undoChain() override;

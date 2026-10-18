@@ -44,6 +44,7 @@
 #include "ToastView.h"
 #include "TunerView.h"
 #include "browser/ToneBrowser.h"
+#include "gp200/GP200Panel.h"
 #include "core/DelayedCall.h"
 #include "modals/ConnectionModal.h"
 #include "modals/UpdateNotice.h"
@@ -146,6 +147,9 @@ private:
   PluginHeader header_;
   HintBar hintBar_;
   MainScreen main_;  // meters + chain gallery
+  std::unique_ptr<GP200Panel> gp200_;
+  bool gp200Shown_ = false;
+  void setGp200Shown(bool shown);
   std::unique_ptr<ToneBrowser> browser_;
   std::unique_ptr<SignInScreen> signIn_;
   std::unique_ptr<TunerView> tuner_;

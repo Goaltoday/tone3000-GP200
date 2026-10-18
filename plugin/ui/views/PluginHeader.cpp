@@ -37,6 +37,8 @@ PluginHeader::PluginHeader(Services& services)
       presetBar_(services),
       tuner_(custom_icons::kTuningFork, 28, 18) {
   addAndMakeVisible(*logo_);
+  addAndMakeVisible(gp200_);
+  gp200_.onClick = [this] { if (onGp200) onGp200(); };
   addAndMakeVisible(presetBar_);
 
   stereo_.onToggle = [this](bool stereo) {
@@ -127,7 +129,8 @@ void PluginHeader::resized() {
     return c.getX();
   };
 
-  logo_->setBounds(area.getX(), cy - kLogoHeight / 2, kLogoWidth, kLogoHeight);
+  logo_->setBounds(area.getX(), cy - kLogoHeight / 2, 88, kLogoHeight);
+  gp200_.setBounds(area.getX()+94, cy-15, 66, 30);
 
   // Right group, laid out from the right edge: account · undo/redo · tuner ·
   // stereo · presets, 40px apart (16px inside the undo/redo pair).

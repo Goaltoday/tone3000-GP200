@@ -9,6 +9,7 @@
 #include "StereoModeToggle.h"
 #include "services/Services.h"
 #include "widgets/IconButton.h"
+#include "widgets/PillButton.h"
 
 namespace t3k::ui {
 
@@ -25,6 +26,7 @@ public:
 
   std::function<void(bool show)> onToggleTuner;
   std::function<void(bool stereo)> onStereoToggle;
+  std::function<void()> onGp200;
   std::function<void()> onUndo, onRedo, onOpenSettings, onLogin, onLogout;
 
   void paint(juce::Graphics& g) override;
@@ -41,6 +43,7 @@ private:
   Services& services_;
   juce::String avatarUrl_;
   std::unique_ptr<LogoLink> logo_;
+  PillButton gp200_{"GP200", PillButton::Style::outline};
   PresetBar presetBar_;
   StereoModeToggle stereo_;
   IconButton tuner_;

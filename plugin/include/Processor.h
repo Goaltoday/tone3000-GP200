@@ -233,6 +233,7 @@ public:
   // saw (-1 for "give me everything"); when the chain hasn't changed since,
   // a minimal { revision, unchanged: true } object is returned so the UI's
   // poll loop stays cheap.
+  std::vector<uint8_t> getGp200NamBytes(const std::string& blockId, int modelId) const;
   juce::var getChainState(int knownRevision) const;
   // Current chain revision, promoting any settled continuous-gesture edit
   // into a real bump first. The UI's ChainStore polls this (an atomic read)
