@@ -2,6 +2,11 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "services/Services.h"
 #include "widgets/PillButton.h"
+#include "widgets/TextField.h"
+#include "widgets/form/SelectField.h"
+#include "widgets/form/FormStyle.h"
+#include "core/Fonts.h"
+#include "core/Theme.h"
 #include "GP200NAM.h"
 #include "GP200ModSyncProtocol.h"
 #include "Eligible.h"
@@ -16,39 +21,99 @@ namespace t3k::ui {
 class GP200Panel final : public juce::Component, private juce::Timer, private juce::MidiInputCallback {
 public:
  explicit GP200Panel(Services& services) : services_(services) {
-  addAndMakeVisible(input); addAndMakeVisible(output); addAndMakeVisible(refresh); addAndMakeVisible(fileButton);
-  addAndMakeVisible(models);addAndMakeVisible(note);
-  models.setTextWhenNothingSelected("Choose a loaded NAM");models.setName("Loaded NAM model");models.onChange=[this]{selectLoaded();};
-  note.setText("Transfers the NAM only. Tone3000 EQ, IR, gain and chain settings are not transferred. Requires NH04 firmware. Select another AMP on the pedal before uploading; keep the preset unchanged during upload.",juce::dontSendNotification);
-  note.setColour(juce::Label::textColourId,juce::Colours::lightgrey);
-  addAndMakeVisible(destination);addAndMakeVisible(name);addAndMakeVisible(send);addAndMakeVisible(status);
-  refresh.setButtonText("Refresh MIDI"); fileButton.setButtonText("Refresh loaded NAMs");send.setButtonText("Upload NAM HOT");
-  input.setTextWhenNothingSelected("MIDI input");output.setTextWhenNothingSelected("MIDI output");
-  for(auto d:lite::eligible) destination.addItem(juce::String(d.number)+" - "+d.name,d.number);
-  name.setTextToShowWhenEmpty("Model name (max 12 ASCII)",juce::Colours::grey);
-  status.setColour(juce::Label::textColourId,juce::Colours::white);
+  for(auto* c:std::initializer_list<juce::Component*>{&input,&output,&refresh,&fileButton,&models,&note,&destination,&name,&send,&status})
+   addAndMakeVisible(c);
+  models.setPlaceholder("Choose a loaded NAM");
+  models.onChange=[this](const juce::String& value){models.setValue(value);selectLoaded();};
+  input.onChange=[this](const juce::String& value){input.setValue(value);};
+  output.onChange=[this](const juce::String& value){output.setValue(value);};
+  destination.onChange=[this](const juce::String& value){destination.setValue(value);};
+  input.setPlaceholder("Choose MIDI input");output.setPlaceholder("Choose MIDI output");
+  destination.setPlaceholder("Choose destination AMP");
+  std::vector<SelectField::Option> destinations;
+  for(auto d:lite::eligible) destinations.push_back({juce::String(d.number),juce::String(d.number)+" - "+d.name,{}});
+  destination.setOptions(std::move(destinations));
+  name.setPlaceholder("Model name (1-12 ASCII characters)");name.setName("GP200 model name");
+  name.setFontSize(form::kFieldPx);name.setCornerRadius(form::kFieldRadius);
+  name.setBackground(theme::kBlack);name.setBorder(form::kFieldBorder);
+  note.setText("NAM weights and name only; Tone3000 EQ, IR, gain and chain settings stay in Tone3000. Requires NH04 firmware. Select a different AMP on the pedal before uploading and keep the preset unchanged during transfer.",juce::dontSendNotification);
+  note.setFont(Fonts::sans(12));note.setColour(juce::Label::textColourId,theme::kMuted);
+  note.setJustificationType(juce::Justification::topLeft);
+  status.setFont(Fonts::sans(13));status.setColour(juce::Label::textColourId,theme::kWhite);
+  status.setJustificationType(juce::Justification::topLeft);
+  note.setBorderSize(juce::BorderSize<int>(0));status.setBorderSize(juce::BorderSize<int>(0));
+  refresh.setLabel("Refresh MIDI");fileButton.setLabel("Refresh NAMs");send.setLabel("Upload NAM");
   send.setEnabled(false);
   refresh.onClick=[this]{scan();};fileButton.onClick=[this]{choose();};send.onClick=[this]{begin();};
   setSize(1024,460);scan();choose();startTimer(20);
  }
  ~GP200Panel() override { stopTimer(); if(in) in->stop(); in.reset(); out.reset(); }
- void refreshLoaded() { if(!busy()) choose(); }
+ void refreshLoaded() { if(!busy()) {scan();choose();} }
  bool busy() const { return stage!=Stage::idle; }
- void paint(juce::Graphics&g) override {g.fillAll(juce::Colour(0xff161c26));g.setColour(juce::Colours::white);g.setFont(juce::FontOptions(19.0f));g.drawText("GP200 | Loaded NAMs → pedal",20,12,getWidth()-40,30,juce::Justification::centredLeft);}
+ void paint(juce::Graphics&g) override {
+  g.fillAll(theme::kBlack);
+  const auto content=contentBounds();const int x=content.getX(),w=content.getWidth();
+  g.setColour(theme::kWhite);g.setFont(Fonts::sans(20,true));
+  g.drawText("GP200",x,14,w,26,juce::Justification::centredLeft);
+  g.setFont(Fonts::sans(13));g.setColour(theme::kMuted);
+  g.drawText("Send a loaded NAM to your pedal",x,44,w,20,juce::Justification::centredLeft);
+  g.setColour(theme::kBorder);g.drawHorizontalLine(76,float(x),float(x+w));
+  caption(g,input,"MIDI INPUT");caption(g,output,"MIDI OUTPUT");
+  caption(g,models,"LOADED NAM");caption(g,destination,"DESTINATION AMP");caption(g,name,"MODEL NAME");
+  const auto box=status.getBounds().expanded(12,10).toFloat();
+  g.setColour(theme::kSurface);g.fillRoundedRectangle(box,form::kCardRadius);
+  g.setColour(theme::kBorder);g.drawRoundedRectangle(box,form::kCardRadius,1.0f);
+ }
  void resized() override {
-  auto r=getLocalBounds().reduced(20);r.removeFromTop(50);auto a=r.removeFromTop(35);input.setBounds(a.removeFromLeft(245));a.removeFromLeft(8);output.setBounds(a.removeFromLeft(245));a.removeFromLeft(8);refresh.setBounds(a);
-  r.removeFromTop(10);a=r.removeFromTop(36);fileButton.setBounds(a.removeFromLeft(160));a.removeFromLeft(10);destination.setBounds(a.removeFromLeft(240));a.removeFromLeft(10);name.setBounds(a);
-  r.removeFromTop(12);models.setBounds(r.removeFromTop(36));
-  r.removeFromTop(10);note.setBounds(r.removeFromTop(55));
-  r.removeFromTop(15);send.setBounds(r.removeFromTop(40));r.removeFromTop(10);status.setBounds(r.removeFromTop(95));
+  auto r=contentBounds();const int x=r.getX(),w=r.getWidth(),gap=12;
+  const int refreshWidth=132,fieldWidth=juce::jmax(80,(w-refreshWidth-2*gap)/2);
+  input.setBounds(x,110,fieldWidth,40);output.setBounds(x+fieldWidth+gap,110,fieldWidth,40);
+  refresh.setBounds(x+w-refreshWidth,112,refreshWidth,36);
+  models.setBounds(x,190,juce::jmax(80,w-refreshWidth-gap),40);
+  fileButton.setBounds(x+w-refreshWidth,192,refreshWidth,36);
+  const int targetWidth=juce::jmax(100,(w-gap)/2);
+  destination.setBounds(x,270,targetWidth,40);name.setBounds(x+targetWidth+gap,270,w-targetWidth-gap,40);
+  note.setBounds(x,326,juce::jmax(100,w-180),58);send.setBounds(x+w-160,330,160,40);
+  status.setBounds(x+12,410,w-24,juce::jmax(30,getHeight()-430));
  }
 private:
  Services& services_;
  struct Source { std::string blockId; int modelId; juce::String title; };
  std::vector<Source> sources_;
  juce::Array<juce::MidiDeviceInfo> midiInputs_,midiOutputs_;
- juce::ComboBox models;juce::Label note;
- juce::ComboBox input,output,destination;PillButton refresh{"Refresh MIDI", PillButton::Style::outline},fileButton{"Refresh loaded NAMs", PillButton::Style::outline},send{"Upload NAM HOT", PillButton::Style::filled};juce::TextEditor name;juce::Label status;
+ SelectField models{"Loaded NAM model"},input{"GP200 MIDI input"},output{"GP200 MIDI output"},destination{"GP200 destination AMP"};
+ juce::Label note,status;
+ PillButton refresh{"Refresh MIDI", PillButton::Style::outline},fileButton{"Refresh NAMs", PillButton::Style::outline},send{"Upload NAM", PillButton::Style::filled};
+ TextField name;
+ double nextMidiScan_=0;
+ juce::Rectangle<int> contentBounds() const {
+  const int width=juce::jmax(1,juce::jmin(1000,getWidth()-48));
+  return {(getWidth()-width)/2,0,width,getHeight()};
+ }
+ static void caption(juce::Graphics& g,const juce::Component& field,const juce::String& text) {
+  g.setColour(theme::kMuted);g.setFont(Fonts::tracked(Fonts::mono(11),0.04f));
+  g.drawText(text,field.getX(),field.getY()-24,field.getWidth(),18,juce::Justification::centredLeft);
+ }
+ static int selectedId(const SelectField& field) {return field.value()?field.value()->getIntValue():0;}
+ static bool isGp200(const juce::String& deviceName) {
+  return deviceName.toUpperCase().retainCharacters("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789").contains("GP200");
+ }
+ static bool sameDevices(const juce::Array<juce::MidiDeviceInfo>& a,const juce::Array<juce::MidiDeviceInfo>& b) {
+  if(a.size()!=b.size())return false;
+  for(int i=0;i<a.size();++i)if(a[i].identifier!=b[i].identifier||a[i].name!=b[i].name)return false;
+  return true;
+ }
+ static void populatePorts(SelectField& field,const juce::Array<juce::MidiDeviceInfo>& devices) {
+  const auto previous=field.value();std::optional<juce::String> preferred;
+  std::vector<SelectField::Option> options;
+  for(const auto& device:devices) {
+   options.push_back({device.identifier,device.name,{}});
+   if(!preferred&&isGp200(device.name))preferred=device.identifier;
+  }
+  field.close();field.setOptions(std::move(options));
+  for(const auto& device:devices)if(previous&&device.identifier==*previous){field.setValue(previous);return;}
+  field.setValue(preferred);
+ }
  std::unique_ptr<juce::MidiInput> in;std::unique_ptr<juce::MidiOutput> out;
  std::vector<juce::uint8> weights;gp200::GP200IRUpload active,pending;
  enum class Stage {idle,preset,livePreset,query,write};Stage stage=Stage::idle;std::atomic<unsigned> generation{0};
@@ -99,22 +164,40 @@ private:
  }
 
  void log(const juce::String&s){status.setText(s,juce::dontSendNotification);}
- void scan(){midiInputs_=juce::MidiInput::getAvailableDevices();midiOutputs_=juce::MidiOutput::getAvailableDevices();const auto& ins=midiInputs_;const auto& outs=midiOutputs_;input.clear();output.clear();for(int i=0;i<ins.size();++i)input.addItem(ins[i].name,i+1);for(int i=0;i<outs.size();++i)output.addItem(outs[i].name,i+1);log("Select GP-200 MIDI ports, a loaded NAM and an eligible Factory AMP.");}
+ void scan(){
+  if(busy())return;
+  midiInputs_=juce::MidiInput::getAvailableDevices();midiOutputs_=juce::MidiOutput::getAvailableDevices();
+  populatePorts(input,midiInputs_);populatePorts(output,midiOutputs_);
+  nextMidiScan_=juce::Time::getMillisecondCounterHiRes()+1000;
+ }
  void choose(){
   if(busy())return;
-  models.clear(juce::dontSendNotification);sources_.clear();weights.clear();send.setEnabled(false);
+  const int previousIndex=selectedId(models)-1;
+  std::optional<Source> previous;
+  if(previousIndex>=0&&previousIndex<int(sources_.size()))previous=sources_[size_t(previousIndex)];
+  models.close();sources_.clear();weights.clear();send.setEnabled(false);
   services_.chain.refresh(true);
+  std::vector<SelectField::Option> options;
+  int selection=1;
   for(const auto* block:services_.chain.state().toneBlocks()){
    if(!block->tone.isNam()||!block->loaded||block->modelLoading||block->loadFailed)continue;
    juce::String title=block->tone.title;
    for(const auto& model:block->tone.models)if(model.id==block->activeModelId)title+=" / "+model.name;
-   sources_.push_back({block->blockId,block->activeModelId,title});models.addItem(title,int(sources_.size()));
+   sources_.push_back({block->blockId,block->activeModelId,title});
+   const int id=int(sources_.size());options.push_back({juce::String(id),title,{}});
+   if(previous&&previous->blockId==block->blockId&&previous->modelId==block->activeModelId)selection=id;
   }
-  log(sources_.empty()?"Load a NAM in Tone3000 first, then refresh this list.":"Choose a loaded NAM. Compatibility is checked from its cached bytes.");
+  models.setOptions(std::move(options));
+  if(sources_.empty()){
+   models.setValue(std::nullopt);name.setText({});
+   log("Load a NAM in Tone3000, then select Refresh NAMs.");
+  }else{
+   models.setValue(juce::String(selection));selectLoaded();
+  }
  }
  void selectLoaded(){
   if(busy())return;
-  weights.clear();send.setEnabled(false);const int index=models.getSelectedId()-1;
+  weights.clear();send.setEnabled(false);name.setText({});const int index=selectedId(models)-1;
   if(index<0||index>=int(sources_.size()))return;
   const auto& source=sources_[size_t(index)];
   const auto bytes=services_.backend.getGp200NamBytes(source.blockId,source.modelId);
@@ -124,12 +207,14 @@ private:
   juce::String ascii;for(auto c:source.title)if(c>=32&&c<=126)ascii+=juce::String::charToString(c);
   name.setText(ascii.substring(0,12));send.setEnabled(true);log("Compatible A2 Lite, 48 kHz. Ready to select the destination AMP.");
  }
- void setBusyControls(bool enabled){for(auto* c:std::initializer_list<juce::Component*>{&models,&fileButton,&refresh,&input,&output,&destination,&name})c->setEnabled(enabled);}
+ void setBusyControls(bool enabled){for(auto* field:{&models,&input,&output,&destination})field->setDisabled(!enabled);for(auto* c:std::initializer_list<juce::Component*>{&models,&fileButton,&refresh,&input,&output,&destination,&name})c->setEnabled(enabled);}
  void reset(const juce::String& s){++generation;stage=Stage::idle;setBusyControls(true);waiting=false;packet=0;presetRequestSent=false; presetHandshakeStep=0;activeSlot=-1;liveFrames.clear();active={};pending={};if(in)in->stop();in.reset();out.reset();send.setEnabled(!weights.empty());log(s);}
- void begin(){if(stage!=Stage::idle||weights.empty())return;target=destination.getSelectedId()-1;
+ void begin(){if(stage!=Stage::idle||weights.empty())return;target=selectedId(destination)-1;
   if(!lite::isEligible(target)){log("Select an eligible destination.");return;}
-  selectedName=name.getText().trim();if(selectedName.isEmpty()||selectedName.length()>12){log("Name must be 1-12 ASCII characters.");return;}for(auto c:selectedName)if(c<32||c>126){log("Name must be printable ASCII.");return;}
-  const auto& ins=midiInputs_;const auto& outs=midiOutputs_;int i=input.getSelectedId()-1,o=output.getSelectedId()-1;
+  selectedName=name.text().trim();if(selectedName.isEmpty()||selectedName.length()>12){log("Name must be 1-12 ASCII characters.");return;}for(auto c:selectedName)if(c<32||c>126){log("Name must be printable ASCII.");return;}
+  const auto& ins=midiInputs_;const auto& outs=midiOutputs_;int i=-1,o=-1;
+  for(int k=0;k<ins.size();++k)if(input.value()&&ins[k].identifier==*input.value())i=k;
+  for(int k=0;k<outs.size();++k)if(output.value()&&outs[k].identifier==*output.value())o=k;
   if(i<0||i>=ins.size()||o<0||o>=outs.size()){log("Choose both MIDI ports.");return;}
   in=juce::MidiInput::openDevice(ins[i].identifier,this);out=juce::MidiOutput::openDevice(outs[o].identifier);
   if(!in||!out){reset("Could not open MIDI ports. Close other loaders and disable this GP200 MIDI input in Tone3000 audio/MIDI settings, then refresh ports.");return;}in->start();
@@ -138,7 +223,17 @@ private:
   if(active.chunks.empty()||pending.chunks.empty()){reset("Unable to build NH04 transfer.");return;}
   send.setEnabled(false);setBusyControls(false);startPresetRead();
  }
- void timerCallback() override {if(stage==Stage::idle||!out)return;double now=juce::Time::getMillisecondCounterHiRes();if(now<due)return;
+ void timerCallback() override {
+  const double now=juce::Time::getMillisecondCounterHiRes();
+  if(stage==Stage::idle){
+   if(!isShowing())return;
+   if(now>=nextMidiScan_){
+    nextMidiScan_=now+1000;
+    if(!sameDevices(midiInputs_,juce::MidiInput::getAvailableDevices())||!sameDevices(midiOutputs_,juce::MidiOutput::getAvailableDevices()))scan();
+   }
+   return;
+  }
+  if(!out||now<due)return;
   if(stage==Stage::livePreset){reset("Timed out reading complete LIVE preset. Upload blocked; no flash write sent.");return;}
   if(stage==Stage::preset){
    if(presetHandshakeStep==0){
