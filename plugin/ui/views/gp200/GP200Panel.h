@@ -23,8 +23,8 @@ namespace t3k::ui {
 class GP200Panel final : public juce::Component, private juce::Timer, private juce::MidiInputCallback {
 public:
  explicit GP200Panel(Services& services) : services_(services) {
-  for(auto* c:std::initializer_list<juce::Component*>{&input,&output,&refresh,&fileButton,&models,&note,&destination,&name,&send,&status})addAndMakeVisible(c);
-  models.setPlaceholder("Choose a loaded NAM");
+  for(auto* c:std::initializer_list<juce::Component*>{&input,&output,&refresh,&fileButton,&localFileButton,&models,&note,&destination,&name,&send,&status})addAndMakeVisible(c);
+  models.setPlaceholder("Choose a loaded NAM or open a file");
   models.onChange=[this](const juce::String& value){models.setValue(value);selectLoaded();};
   input.onChange=[this](const juce::String& value){input.setValue(value);queueAmpNames();};
   output.onChange=[this](const juce::String& value){output.setValue(value);queueAmpNames();};
@@ -37,25 +37,25 @@ public:
   note.setFont(Fonts::sans(12));note.setColour(juce::Label::textColourId,theme::kMuted);note.setJustificationType(juce::Justification::topLeft);
   status.setFont(Fonts::sans(13));status.setColour(juce::Label::textColourId,theme::kWhite);status.setJustificationType(juce::Justification::topLeft);
   note.setBorderSize(juce::BorderSize<int>(0));status.setBorderSize(juce::BorderSize<int>(0));
-  refresh.setLabel("Refresh MIDI");fileButton.setLabel("Refresh NAMs");send.setLabel("Upload NAM");send.setEnabled(false);
-  refresh.onClick=[this]{scan();queueAmpNames(true);};fileButton.onClick=[this]{choose();};send.onClick=[this]{begin();};
+  refresh.setLabel("Refresh MIDI");fileButton.setLabel("Refresh NAMs");localFileButton.setLabel("Open NAM...");send.setLabel("Upload NAM");send.setEnabled(false);
+  refresh.onClick=[this]{scan();queueAmpNames(true);};fileButton.onClick=[this]{choose();};localFileButton.onClick=[this]{openLocalFile();};send.onClick=[this]{begin();};
   setSize(1024,460);scan();choose();startTimer(20);
  }
  ~GP200Panel() override {stopTimer();if(in)in->stop();in.reset();out.reset();}
  void refreshLoaded(){if(!busy()){scan();choose();}}
- bool busy()const{return stage!=Stage::idle;}
+ bool busy()const{return stage!=Stage::idle||fileDialogOpen_;}
  void paint(juce::Graphics&g)override{
   g.fillAll(theme::kBlack);const auto content=contentBounds();const int x=content.getX(),w=content.getWidth();
   g.setColour(theme::kWhite);g.setFont(Fonts::sans(20,true));g.drawText("GP200",x,14,w,26,juce::Justification::centredLeft);
-  g.setFont(Fonts::sans(13));g.setColour(theme::kMuted);g.drawText("Send a loaded NAM to your pedal",x,44,w,20,juce::Justification::centredLeft);
+  g.setFont(Fonts::sans(13));g.setColour(theme::kMuted);g.drawText("Send a loaded NAM or a local .nam file to your pedal",x,44,w,20,juce::Justification::centredLeft);
   g.setColour(theme::kBorder);g.drawHorizontalLine(76,float(x),float(x+w));
-  caption(g,input,"MIDI INPUT");caption(g,output,"MIDI OUTPUT");caption(g,models,"LOADED NAM");caption(g,destination,"DESTINATION AMP");caption(g,name,"MODEL NAME");
+  caption(g,input,"MIDI INPUT");caption(g,output,"MIDI OUTPUT");caption(g,models,"NAM SOURCE");caption(g,destination,"DESTINATION AMP");caption(g,name,"MODEL NAME");
   const auto box=status.getBounds().expanded(12,10).toFloat();g.setColour(theme::kSurface);g.fillRoundedRectangle(box,form::kCardRadius);g.setColour(theme::kBorder);g.drawRoundedRectangle(box,form::kCardRadius,1.0f);
  }
  void resized()override{
   auto r=contentBounds();const int x=r.getX(),w=r.getWidth(),gap=12,refreshWidth=132,fieldWidth=juce::jmax(80,(w-refreshWidth-2*gap)/2);
   input.setBounds(x,110,fieldWidth,40);output.setBounds(x+fieldWidth+gap,110,fieldWidth,40);refresh.setBounds(x+w-refreshWidth,112,refreshWidth,36);
-  models.setBounds(x,190,juce::jmax(80,w-refreshWidth-gap),40);fileButton.setBounds(x+w-refreshWidth,192,refreshWidth,36);
+  models.setBounds(x,190,juce::jmax(80,w-2*refreshWidth-2*gap),40);fileButton.setBounds(x+w-2*refreshWidth-gap,192,refreshWidth,36);localFileButton.setBounds(x+w-refreshWidth,192,refreshWidth,36);
   const int targetWidth=juce::jmax(100,(w-gap)/2);destination.setBounds(x,270,targetWidth,40);name.setBounds(x+targetWidth+gap,270,w-targetWidth-gap,40);
   note.setBounds(x,326,juce::jmax(100,w-180),58);send.setBounds(x+w-160,330,160,40);status.setBounds(x+12,410,w-24,juce::jmax(30,getHeight()-430));
  }
@@ -64,13 +64,18 @@ private:
  struct Source{std::string blockId;int modelId;juce::String title;};
  std::vector<Source>sources_;
  juce::Array<juce::MidiDeviceInfo>midiInputs_,midiOutputs_;
- SelectField models{"Loaded NAM model"},input{"GP200 MIDI input"},output{"GP200 MIDI output"},destination{"GP200 destination AMP"};
+ SelectField models{"NAM source"},input{"GP200 MIDI input"},output{"GP200 MIDI output"},destination{"GP200 destination AMP"};
  juce::Label note,status;
- PillButton refresh{"Refresh MIDI",PillButton::Style::outline},fileButton{"Refresh NAMs",PillButton::Style::outline},send{"Upload NAM",PillButton::Style::filled};
+ PillButton refresh{"Refresh MIDI",PillButton::Style::outline},fileButton{"Refresh NAMs",PillButton::Style::outline},localFileButton{"Open NAM...",PillButton::Style::outline},send{"Upload NAM",PillButton::Style::filled};
  TextField name;
  double nextMidiScan_=0;
  std::unique_ptr<juce::MidiInput>in;std::unique_ptr<juce::MidiOutput>out;
  bool modelReady_=false;std::vector<juce::uint8>weights;gp200::GP200IRUpload active,pending;
+ // A validated local-file snapshot stays independent of the Tone3000 chain.
+ juce::File localFile_;
+ std::vector<juce::uint8>localWeights_;
+ std::unique_ptr<juce::FileChooser>fileChooser_;
+ bool fileDialogOpen_=false;
  enum class Stage{idle,names,preset,livePreset,query,write};Stage stage=Stage::idle;std::atomic<unsigned>generation{0};
  int packet=0,target=-1;unsigned nonce=0;double due=0;bool waiting=false;juce::String selectedName;
  gp200::PresetFrames stateFrames{5,true},liveFrames{7};
@@ -132,8 +137,9 @@ private:
   if(busy())return;midiInputs_=juce::MidiInput::getAvailableDevices();midiOutputs_=juce::MidiOutput::getAvailableDevices();
   populatePorts(input,midiInputs_);populatePorts(output,midiOutputs_);nextMidiScan_=juce::Time::getMillisecondCounterHiRes()+1000;queueAmpNames();
  }
- void choose(){
-  if(busy())return;const int previousIndex=selectedId(models)-1;std::optional<Source>previous;
+ void choose(bool preferLocal=false){
+  if(busy())return;const bool keepLocal=!localWeights_.empty()&&(preferLocal||(models.value()&&*models.value()=="local"));
+  const int previousIndex=selectedId(models)-1;std::optional<Source>previous;
   if(previousIndex>=0&&previousIndex<int(sources_.size()))previous=sources_[size_t(previousIndex)];
   models.close();sources_.clear();weights.clear();modelReady_=false;send.setEnabled(false);services_.chain.refresh(true);std::vector<SelectField::Option>options;int selection=1;
   for(const auto*block:services_.chain.state().toneBlocks()){
@@ -142,21 +148,59 @@ private:
    sources_.push_back({block->blockId,block->activeModelId,title});const int id=int(sources_.size());options.push_back({juce::String(id),title,{}});
    if(previous&&previous->blockId==block->blockId&&previous->modelId==block->activeModelId)selection=id;
   }
-  models.setOptions(std::move(options));if(sources_.empty()){models.setValue(std::nullopt);name.setText({});log("Load a NAM in Tone3000, then select Refresh NAMs.");}
+  if(!localWeights_.empty())options.push_back({"local","File: "+localFile_.getFileName(),{}});
+  models.setOptions(std::move(options));
+  if(keepLocal||(sources_.empty()&&!localWeights_.empty())){models.setValue(juce::String("local"));selectLoaded();}
+  else if(sources_.empty()){models.setValue(std::nullopt);name.setText({});log("Load a NAM in Tone3000 or select Open NAM... to choose a local file.");}
   else{models.setValue(juce::String(selection));selectLoaded();}
  }
  void selectLoaded(){
-  if(busy())return;weights.clear();modelReady_=false;send.setEnabled(false);name.setText({});const int index=selectedId(models)-1;if(index<0||index>=int(sources_.size()))return;
+  if(busy())return;weights.clear();modelReady_=false;send.setEnabled(false);name.setText({});
+  if(models.value()&&*models.value()=="local"){
+   if(localWeights_.empty())return;
+   weights=localWeights_;setModelName(localFile_.getFileNameWithoutExtension());modelReady_=true;send.setEnabled(true);
+   log("Local NAM validated: "+localFile_.getFileName()+". Select the destination AMP.");return;
+  }
+  const int index=selectedId(models)-1;if(index<0||index>=int(sources_.size()))return;
   const auto&source=sources_[size_t(index)];const auto bytes=services_.backend.getGp200NamBytes(source.blockId,source.modelId);
   if(bytes.empty()){log("Model changed, is loading or unavailable. Refresh loaded NAMs.");return;}
   auto result=gp200::GP200NAM::readJson(juce::String::fromUTF8(reinterpret_cast<const char*>(bytes.data()),int(bytes.size())),weights);
   if(result.failed()){weights.clear();log("Not GP200 compatible: "+result.getErrorMessage());return;}
-  juce::String ascii;for(auto c:source.title)if(c>=32&&c<=126)ascii+=juce::String::charToString(c);name.setText(ascii.substring(0,12));modelReady_=true;send.setEnabled(true);log("Compatible A2 Lite, 48 kHz. Ready to select the destination AMP.");
+  setModelName(source.title);modelReady_=true;send.setEnabled(true);log("Compatible A2 Lite, 48 kHz. Ready to select the destination AMP.");
  }
- void setBusyControls(bool enabled){for(auto*field:{&models,&input,&output,&destination})field->setDisabled(!enabled);for(auto*c:std::initializer_list<juce::Component*>{&models,&fileButton,&refresh,&input,&output,&destination,&name})c->setEnabled(enabled);}
+ void setModelName(const juce::String&title){
+  juce::String ascii;for(auto c:title)if(c>=32&&c<=126)ascii+=juce::String::charToString(c);
+  ascii=ascii.trim().substring(0,12);name.setText(ascii.isEmpty()?juce::String("NAM"):ascii);
+ }
+ void openLocalFile(){
+  if(busy())return;
+  fileChooser_=std::make_unique<juce::FileChooser>("Open a GP200-compatible NAM",localFile_,"*.nam",true);
+  fileDialogOpen_=true;setBusyControls(false);send.setEnabled(false);
+  juce::Component::SafePointer<GP200Panel>safe(this);
+  fileChooser_->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,[safe](const juce::FileChooser&chooser){
+   if(!safe)return;const auto file=chooser.getResult();safe->fileDialogOpen_=false;safe->setBusyControls(true);
+   if(file==juce::File{}){safe->send.setEnabled(safe->modelReady_&&!safe->weights.empty());return;}
+   safe->loadLocalFile(file);
+  });
+ }
+ void loadLocalFile(const juce::File&file){
+  // Invalidate the current upload first: a rejected file must never send old weights.
+  weights.clear();modelReady_=false;send.setEnabled(false);models.setValue(std::nullopt);name.setText({});
+  juce::FileInputStream stream(file);
+  if(!stream.openedOk()){log("Could not open the NAM file. Upload blocked.");return;}
+  const auto size=stream.getTotalLength();
+  if(size<=0||size>8*1024*1024){log("Cannot open NAM: file empty or larger than 8 MiB.");return;}
+  juce::MemoryBlock bytes(static_cast<size_t>(size));
+  if(stream.read(bytes.getData(),static_cast<int>(size))!=size){log("Could not read the complete NAM file. Upload blocked.");return;}
+  std::vector<juce::uint8>parsed;
+  const auto result=gp200::GP200NAM::readJson(juce::String::createStringFromData(bytes.getData(),static_cast<int>(size)),parsed);
+  if(result.failed()||parsed.size()!=gp200::GP200NAM::weightBytes){log("Not GP200 compatible: "+(result.failed()?result.getErrorMessage():juce::String("Invalid weight length.")));return;}
+  localFile_=file;localWeights_=std::move(parsed);choose(true);
+ }
+ void setBusyControls(bool enabled){for(auto*field:{&models,&input,&output,&destination})field->setDisabled(!enabled);for(auto*c:std::initializer_list<juce::Component*>{&models,&fileButton,&localFileButton,&refresh,&input,&output,&destination,&name})c->setEnabled(enabled);}
  void reset(const juce::String&s){++generation;stage=Stage::idle;setBusyControls(true);waiting=false;packet=0;presetRequestSent=false;presetHandshakeStep=0;activeSlot=-1;liveFrames.clear();active={};pending={};if(in)in->stop();in.reset();out.reset();send.setEnabled(modelReady_&&!weights.empty());log(s);}
  void begin(){
-  if(stage!=Stage::idle||!modelReady_||weights.empty())return;target=selectedId(destination)-1;
+  if(busy()||!modelReady_||weights.empty())return;target=selectedId(destination)-1;
   if(!lite::isEligible(target)){log("Select an eligible destination.");return;}
   selectedName=name.text().trim();if(selectedName.isEmpty()||selectedName.length()>12){log("Name must be 1-12 ASCII characters.");return;}for(auto c:selectedName)if(c<32||c>126){log("Name must be printable ASCII.");return;}
   if(!openPorts()){reset("Could not open MIDI ports. Close other loaders and disable this GP200 MIDI input in Tone3000 audio/MIDI settings, then refresh ports.");return;}
@@ -194,7 +238,7 @@ private:
  void timerCallback()override{
   const double now=juce::Time::getMillisecondCounterHiRes();
   if(stage==Stage::idle){
-   if(!isShowing())return;
+   if(!isShowing()||fileDialogOpen_)return;
    if(now>=nextMidiScan_){nextMidiScan_=now+1000;if(!sameDevices(midiInputs_,juce::MidiInput::getAvailableDevices())||!sameDevices(midiOutputs_,juce::MidiOutput::getAvailableDevices()))scan();}
    if(namesPending_&&selectedPortsKey().isNotEmpty())startAmpNames();return;
   }
